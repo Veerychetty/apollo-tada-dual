@@ -2,6 +2,7 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { Upload as UploadIcon, RefreshCw, ZoomIn, X } from 'lucide-react';
 import ExtractionTable from './ExtractionTable';
 import { TableData } from '../types';
+import essenseLogo from '../assets/Essense labs logo.jpg';
 
 const MAX_IMAGE_SIZE = 15 * 1024 * 1024; // 15 MB
 const API_BASE_URL = 'http://127.0.0.1:5000';
@@ -730,20 +731,24 @@ const DualTyreInterface: React.FC<DualTyreInterfaceProps> = ({ onCombinedResults
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Clean Header */}
-      <header className="bg-white border-b border-gray-200 shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            {/* Left side - Brand */}
-            <div className="flex items-center">
-              <h1 className="text-2xl font-bold text-gray-900">Essense Labs</h1>
+      {/* Clean Header with Logo Banner - Centered */}
+      <header className="bg-black border-b-2 border-gray-800 shadow-lg relative">
+        <div className="max-w-7xl mx-auto px-4 py-3">
+          <div className="flex items-center justify-center relative">
+            {/* Centered Logo */}
+            <div className="flex items-center justify-center">
+              <img 
+                src={essenseLogo} 
+                alt="ESSENSE LABS" 
+                className="h-14 w-auto object-contain max-w-md"
+              />
             </div>
             
-            {/* Right side - Navigation buttons */}
-            <div className="flex items-center gap-4">
+            {/* Right side - Navigation buttons (absolute positioned) */}
+            <div className="absolute right-4 flex items-center gap-4">
               <button
                 onClick={handleStartNewPair}
-                className="px-4 py-2 bg-gray-800 hover:bg-gray-900 text-white rounded-lg font-medium transition-colors"
+                className="px-4 py-2 bg-white hover:bg-gray-100 text-black rounded-lg font-medium transition-colors shadow-md"
               >
                 Start New Tyre Session
               </button>

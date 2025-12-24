@@ -92,6 +92,62 @@ def add_cors_headers(response):
 SESSIONS_DIR = "sessions"
 os.makedirs(SESSIONS_DIR, exist_ok=True)
 
+# --- Security: Path Validation Functions ---
+
+def sanitize_session_id(session_id):
+    """
+    Sanitize session ID to prevent path traversal attacks.
+    Only allows alphanumeric characters, hyphens, and underscores.
+    """
+    if not session_id:
+        return None
+    # Remove any path traversal attempts
+    sanitized = re.sub(r'[^a-zA-Z0-9_-]', '', str(session_id))
+    # Ensure it's not empty and not too long
+    if not sanitized or len(sanitized) > 100:
+        return None
+    return sanitized
+
+def validate_path_within_directory(file_path, allowed_directory):
+    """
+    Validate that a file path is within the allowed directory to prevent path traversal.
+    Returns the normalized absolute path if valid, None otherwise.
+    """
+    try:
+        # Get absolute paths
+        allowed_abs = os.path.abspath(allowed_directory)
+        file_abs = os.path.abspath(file_path)
+        
+        # Normalize paths to handle .. and . correctly
+        allowed_abs = os.path.normpath(allowed_abs)
+        file_abs = os.path.normpath(file_abs)
+        
+        # Check if file path is within allowed directory
+        if not file_abs.startswith(allowed_abs):
+            app.logger.warning(f"Path traversal attempt detected: {file_path}")
+            return None
+        
+        return file_abs
+    except Exception as e:
+        app.logger.error(f"Path validation error: {e}")
+        return None
+
+def secure_file_path(base_dir, filename):
+    """
+    Create a secure file path by sanitizing the filename and validating it stays within base_dir.
+    """
+    # Sanitize filename
+    safe_filename = secure_filename(filename)
+    if not safe_filename:
+        return None
+    
+    # Join paths
+    full_path = os.path.join(base_dir, safe_filename)
+    
+    # Validate path is within base directory
+    validated_path = validate_path_within_directory(full_path, base_dir)
+    return validated_path
+
 # AWS Textract Session
 session = boto3.Session(
     aws_access_key_id=AWS_ACCESS_KEY_ID,
@@ -417,10 +473,25 @@ def find_optimal_split_points(mask, min_distance=50, max_paths=15):
 
 def chunk_dewarped_image(image_path, chunk_folder):
     timer = start_timer()
-    os.makedirs(chunk_folder, exist_ok=True)
-    image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    
+    # Validate image_path to prevent path traversal
+    if not image_path:
+        raise ValueError("Empty image_path provided")
+    
+    # Validate image_path is within SESSIONS_DIR
+    validated_image_path = validate_path_within_directory(image_path, SESSIONS_DIR)
+    if not validated_image_path:
+        raise ValueError(f"Invalid image_path: {image_path}")
+    
+    # Validate chunk_folder is within SESSIONS_DIR
+    validated_chunk_folder = validate_path_within_directory(chunk_folder, SESSIONS_DIR)
+    if not validated_chunk_folder:
+        raise ValueError(f"Invalid chunk_folder: {chunk_folder}")
+    
+    os.makedirs(validated_chunk_folder, exist_ok=True)
+    image = cv2.imread(validated_image_path, cv2.IMREAD_GRAYSCALE)
     if image is None:
-        raise FileNotFoundError(f"Could not read chunking image {image_path}")
+        raise FileNotFoundError(f"Could not read chunking image {validated_image_path}")
     H, W = image.shape
     scale_factor = 0.5
     small_image = cv2.resize(image, (int(W * scale_factor), int(H * scale_factor)))
@@ -486,12 +557,18 @@ def chunk_dewarped_image(image_path, chunk_folder):
         cv2.imwrite(os.path.join(chunk_folder, fname), image)
         chunk_metadata.append({'filename': fname, 'x': 0, 'y': 0, 'width': W, 'height': H})
 
-    meta_path = os.path.join(chunk_folder, "chunk_coords.json")
-    with open(meta_path, "w") as f:
+    # Use validated chunk_folder for meta_path
+    meta_path = os.path.join(validated_chunk_folder, "chunk_coords.json")
+    # Validate meta_path is within chunk_folder
+    validated_meta_path = validate_path_within_directory(meta_path, validated_chunk_folder)
+    if not validated_meta_path:
+        raise ValueError(f"Invalid meta_path: {meta_path}")
+    
+    with open(validated_meta_path, "w") as f:
         json.dump(chunk_metadata, f, indent=2)
 
     log_duration("chunk_dewarped_image", timer, details=f"chunks={len(chunk_metadata)}")
-    return meta_path
+    return validated_meta_path
 
 # --- OCR & Annotation ---
 
@@ -554,7 +631,31 @@ def enhance_image_toggle(input_path, output_path):
 def extract_words_from_file(filepath):
     timer = start_timer()
     try:
-        with open(filepath, "rb") as f:
+        # Validate filepath to prevent path traversal
+        if not filepath:
+            app.logger.error("extract_words_from_file: Empty filepath provided")
+            return []
+        
+        # Get the directory containing the file
+        file_dir = os.path.dirname(os.path.abspath(filepath))
+        
+        # Validate path is within allowed directories (sessions or subdirectories)
+        if not file_dir.startswith(os.path.abspath(SESSIONS_DIR)):
+            app.logger.error(f"extract_words_from_file: Path traversal attempt detected: {filepath}")
+            return []
+        
+        # Normalize and validate the path
+        normalized_path = os.path.normpath(os.path.abspath(filepath))
+        if not normalized_path.startswith(os.path.abspath(SESSIONS_DIR)):
+            app.logger.error(f"extract_words_from_file: Invalid path after normalization: {filepath}")
+            return []
+        
+        # Check if file exists
+        if not os.path.exists(normalized_path) or not os.path.isfile(normalized_path):
+            app.logger.error(f"extract_words_from_file: File does not exist: {normalized_path}")
+            return []
+        
+        with open(normalized_path, "rb") as f:
             blob = f.read()
         if len(blob) > 10 * 1024 * 1024 or len(blob) == 0:
             app.logger.warning(f"File {os.path.basename(filepath)} is too large ({len(blob)} bytes) or empty")
@@ -1116,7 +1217,7 @@ def processsafetywarningnlpocrdata(nlpocrdata, startingid=1):
         r"ISI", r"ECE", r"MAX LOAD", r"MAX PRESS", r"r2,32", r"A-Z?3", r"INNER", r"READY"
     ]
     
-    lines, endidx = extractmultilineblocknlpocrdata(nlpocrdata, r"SAFETY WARNING", stoppatterns)
+    lines, endidx = extract_multiline_block_nlp(nlpocrdata, r"SAFETY WARNING", stoppatterns)
     if not lines:
         return [], startingid
     
@@ -1124,7 +1225,7 @@ def processsafetywarningnlpocrdata(nlpocrdata, startingid=1):
     
     proplist1 = [
         {"Name": "name", "Value": "SAFETY WARNING"},
-        {"Name": "expected_text", "Value": normalizevalue(lines[0])},
+        {"Name": "expected_text", "Value": normalize_value(lines[0])},
         {"Name": "control_id", "Value": 0},
         {"Name": "side_a", "Value": True},
         {"Name": "side_b", "Value": False},
@@ -1141,7 +1242,7 @@ def processsafetywarningnlpocrdata(nlpocrdata, startingid=1):
         val = " ".join(lines[1:]).replace("|", "").strip()
         proplist2 = [
             {"Name": "name", "Value": "SAFETY WARNING LINES"},
-            {"Name": "expected_text", "Value": normalizevalue(val)},
+            {"Name": "expected_text", "Value": normalize_value(val)},
             {"Name": "control_id", "Value": 0},
             {"Name": "side_a", "Value": True},
             {"Name": "side_b", "Value": False},
@@ -1666,10 +1767,35 @@ LAST_SESSION_DIR = None
 
 
 def resolve_session_path(session_id, tyre_type=None):
-    base_path = os.path.join(SESSIONS_DIR, session_id)
+    """
+    Resolve session path with security validation to prevent path traversal.
+    """
+    # Sanitize session_id
+    sanitized_id = sanitize_session_id(session_id)
+    if not sanitized_id:
+        app.logger.error(f"Invalid session_id: {session_id}")
+        return None
+    
+    # Build base path
+    base_path = os.path.join(SESSIONS_DIR, sanitized_id)
+    
+    # Validate base path is within SESSIONS_DIR
+    validated_base = validate_path_within_directory(base_path, SESSIONS_DIR)
+    if not validated_base:
+        app.logger.error(f"Path traversal attempt in session_id: {session_id}")
+        return None
+    
+    # Handle tyre_type subdirectory
     if tyre_type and tyre_type.lower() in ["top", "bottom"]:
-        return os.path.join(base_path, tyre_type.lower())
-    return base_path
+        sub_path = os.path.join(validated_base, tyre_type.lower())
+        # Validate subdirectory path
+        validated_sub = validate_path_within_directory(sub_path, validated_base)
+        if not validated_sub:
+            app.logger.error(f"Path traversal attempt in tyre_type: {tyre_type}")
+            return None
+        return validated_sub
+    
+    return validated_base
 
 
 
@@ -1698,22 +1824,30 @@ def upload():
 
     provided_session_id = request.form.get('session_id')
     if provided_session_id:
-        sess_id = provided_session_id.strip()
+        # Sanitize provided session_id
+        sess_id = sanitize_session_id(provided_session_id.strip())
         if not sess_id:
+            # If sanitization fails, generate new one
             sess_id = uuid.uuid4().hex
     else:
         sess_id = uuid.uuid4().hex
 
-    session_base_path = os.path.join(SESSIONS_DIR, sess_id)
-    os.makedirs(session_base_path, exist_ok=True)
-
+    # Resolve and validate session path
     session_path = resolve_session_path(sess_id, None if tyre_type == 'single' else tyre_type)
-    if os.path.exists(session_path):
-        shutil.rmtree(session_path)
+    if not session_path:
+        return jsonify(error="Invalid session_id"), 400
+    
     os.makedirs(session_path, exist_ok=True)
 
+    # Secure filename handling
     filename = secure_filename(f.filename)
-    input_path = os.path.join(session_path, filename)
+    if not filename:
+        return jsonify(error="Invalid filename"), 400
+    
+    # Create secure file path
+    input_path = secure_file_path(session_path, filename)
+    if not input_path:
+        return jsonify(error="Invalid file path"), 400
     f.save(input_path)
 
     overlay_path = os.path.join(session_path, "overlay.jpg")
@@ -1759,7 +1893,15 @@ def upload():
 
         step_timer = start_timer()
         chunk_coords_json = chunk_dewarped_image(dewarp_path, chunk_dir)
-        with open(chunk_coords_json, "r") as f:
+        # Validate chunk_coords_json path before reading
+        if not chunk_coords_json:
+            return jsonify(error="Failed to generate chunk coordinates"), 500
+        
+        validated_chunk_json = validate_path_within_directory(chunk_coords_json, SESSIONS_DIR)
+        if not validated_chunk_json:
+            return jsonify(error="Invalid chunk coordinates path"), 500
+        
+        with open(validated_chunk_json, "r") as f:
             chunk_coords = json.load(f)
         log_duration("chunk_dewarped_image (upload wrapper)", step_timer, details=f"chunks={len(chunk_coords)}")
 
@@ -1767,9 +1909,23 @@ def upload():
 
         for chunk_meta in chunk_coords:
             chunk_timer = start_timer()
-            fname = chunk_meta["filename"]
-            raw_chunk_path = os.path.join(chunk_dir, fname)
-            enhanced_chunk_path = os.path.join(enhanced_dir, fname)
+            fname = chunk_meta.get("filename", "")
+            if not fname:
+                continue
+            
+            # Sanitize and validate chunk filenames
+            safe_fname = secure_filename(fname)
+            if not safe_fname:
+                app.logger.warning(f"Invalid chunk filename: {fname}")
+                continue
+            
+            # Create secure paths for chunk files
+            raw_chunk_path = secure_file_path(chunk_dir, safe_fname)
+            enhanced_chunk_path = secure_file_path(enhanced_dir, safe_fname)
+            
+            if not raw_chunk_path or not enhanced_chunk_path:
+                app.logger.warning(f"Path validation failed for chunk: {fname}")
+                continue
 
             if image_type == 'thick':
                 print(f"Processing {fname} as THICK image - no enhancement applied")
@@ -1784,7 +1940,13 @@ def upload():
                 enhance_image_alternative(raw_chunk_path, enhanced_chunk_path)
                 detected_items = extract_words_from_file(enhanced_chunk_path)
 
-            annotated_chunk_path = os.path.join(ocr_output_dir, fname.replace(".png", "_annotated.png"))
+            # Secure annotated chunk path
+            annotated_fname = safe_fname.replace(".png", "_annotated.png")
+            annotated_chunk_path = secure_file_path(ocr_output_dir, annotated_fname)
+            if not annotated_chunk_path:
+                app.logger.warning(f"Path validation failed for annotated chunk: {annotated_fname}")
+                continue
+            
             draw_bounding_boxes_on_chunk(raw_chunk_path, enhanced_chunk_path, detected_items, annotated_chunk_path)
 
             for item in detected_items:
@@ -1793,14 +1955,21 @@ def upload():
                     "text": item["text"],
                     "chunk_bbox": item["bbox"],
                     "original_bbox": original_bbox,
-                    "chunk_name": os.path.splitext(fname)[0]
+                    "chunk_name": os.path.splitext(safe_fname)[0]
                 })
             log_duration("chunk_processing", chunk_timer, details=f"{fname}, detections={len(detected_items)}")
 
-        annotated_original_path = os.path.join(session_path, "annotated_full_original.png")
+        # Secure paths for output files
+        annotated_original_path = secure_file_path(session_path, "annotated_full_original.png")
+        if not annotated_original_path:
+            return jsonify(error="Invalid path for annotated image"), 500
+        
         draw_on_original_image(dewarp_path, all_detections, annotated_original_path)
 
-        ocr_json_path = os.path.join(session_path, "ocr.json")
+        ocr_json_path = secure_file_path(session_path, "ocr.json")
+        if not ocr_json_path:
+            return jsonify(error="Invalid path for OCR JSON"), 500
+        
         with open(ocr_json_path, "w", encoding="utf-8") as f:
             json.dump(all_detections, f, indent=2, ensure_ascii=False)
 
@@ -1838,8 +2007,14 @@ def upload():
 def get_dewarped():
     if not LAST_SESSION_DIR:
         return jsonify(error="none yet"), 404
-    path = os.path.join(LAST_SESSION_DIR, "dewarp.jpg")
-    if not os.path.exists(path):
+    
+    # Validate LAST_SESSION_DIR is within SESSIONS_DIR
+    validated_session_dir = validate_path_within_directory(LAST_SESSION_DIR, SESSIONS_DIR)
+    if not validated_session_dir:
+        return jsonify(error="Invalid session directory"), 400
+    
+    path = secure_file_path(validated_session_dir, "dewarp.jpg")
+    if not path or not os.path.exists(path):
         return jsonify(error="dewarped image not found"), 404
     return send_file(path, mimetype="image/jpeg")
 
@@ -1847,56 +2022,95 @@ def get_dewarped():
 def get_stitched():
     if not LAST_SESSION_DIR:
         return jsonify(error="none yet"), 404
-    path = os.path.join(LAST_SESSION_DIR, "annotated_full_original.png")
-    if not os.path.exists(path):
+    
+    # Validate LAST_SESSION_DIR is within SESSIONS_DIR
+    validated_session_dir = validate_path_within_directory(LAST_SESSION_DIR, SESSIONS_DIR)
+    if not validated_session_dir:
+        return jsonify(error="Invalid session directory"), 400
+    
+    path = secure_file_path(validated_session_dir, "annotated_full_original.png")
+    if not path or not os.path.exists(path):
         return jsonify(error="stitched image not found"), 404
     return send_file(path, mimetype="image/png")
 
 
 @app.route('/session/<session_id>/annotated')
 def get_session_annotated(session_id):
-    path = os.path.join(resolve_session_path(session_id), "annotated_full_original.png")
-    if not os.path.exists(path):
+    session_path = resolve_session_path(session_id)
+    if not session_path:
+        return jsonify(error="Invalid session_id"), 400
+    
+    path = secure_file_path(session_path, "annotated_full_original.png")
+    if not path or not os.path.exists(path):
         return jsonify(error="annotated image not found"), 404
     return send_file(path, mimetype="image/png")
 
 
 @app.route('/session/<session_id>/dewarped')
 def get_session_dewarped(session_id):
-    path = os.path.join(resolve_session_path(session_id), "dewarp.jpg")
-    if not os.path.exists(path):
+    session_path = resolve_session_path(session_id)
+    if not session_path:
+        return jsonify(error="Invalid session_id"), 400
+    
+    path = secure_file_path(session_path, "dewarp.jpg")
+    if not path or not os.path.exists(path):
         return jsonify(error="dewarped image not found"), 404
     return send_file(path, mimetype="image/jpeg")
 
 
 @app.route('/session/<session_id>/ocr')
 def get_session_ocr(session_id):
-    path = os.path.join(resolve_session_path(session_id), "ocr.json")
-    if not os.path.exists(path):
+    session_path = resolve_session_path(session_id)
+    if not session_path:
+        return jsonify(error="Invalid session_id"), 400
+    
+    path = secure_file_path(session_path, "ocr.json")
+    if not path or not os.path.exists(path):
         return jsonify(error="ocr data not found"), 404
     return send_file(path, mimetype="application/json")
 
 
 @app.route('/session/<session_id>/<tyre_type>/annotated')
 def get_session_annotated_tyre(session_id, tyre_type):
-    path = os.path.join(resolve_session_path(session_id, tyre_type), "annotated_full_original.png")
-    if not os.path.exists(path):
+    if tyre_type not in ['top', 'bottom']:
+        return jsonify(error="Invalid tyre_type"), 400
+    
+    session_path = resolve_session_path(session_id, tyre_type)
+    if not session_path:
+        return jsonify(error="Invalid session_id"), 400
+    
+    path = secure_file_path(session_path, "annotated_full_original.png")
+    if not path or not os.path.exists(path):
         return jsonify(error="annotated image not found"), 404
     return send_file(path, mimetype="image/png")
 
 
 @app.route('/session/<session_id>/<tyre_type>/dewarped')
 def get_session_dewarped_tyre(session_id, tyre_type):
-    path = os.path.join(resolve_session_path(session_id, tyre_type), "dewarp.jpg")
-    if not os.path.exists(path):
+    if tyre_type not in ['top', 'bottom']:
+        return jsonify(error="Invalid tyre_type"), 400
+    
+    session_path = resolve_session_path(session_id, tyre_type)
+    if not session_path:
+        return jsonify(error="Invalid session_id"), 400
+    
+    path = secure_file_path(session_path, "dewarp.jpg")
+    if not path or not os.path.exists(path):
         return jsonify(error="dewarped image not found"), 404
     return send_file(path, mimetype="image/jpeg")
 
 
 @app.route('/session/<session_id>/<tyre_type>/ocr')
 def get_session_ocr_tyre(session_id, tyre_type):
-    path = os.path.join(resolve_session_path(session_id, tyre_type), "ocr.json")
-    if not os.path.exists(path):
+    if tyre_type not in ['top', 'bottom']:
+        return jsonify(error="Invalid tyre_type"), 400
+    
+    session_path = resolve_session_path(session_id, tyre_type)
+    if not session_path:
+        return jsonify(error="Invalid session_id"), 400
+    
+    path = secure_file_path(session_path, "ocr.json")
+    if not path or not os.path.exists(path):
         return jsonify(error="ocr data not found"), 404
     return send_file(path, mimetype="application/json")
 
@@ -1904,8 +2118,14 @@ def get_session_ocr_tyre(session_id, tyre_type):
 def get_ocr():
     if not LAST_SESSION_DIR:
         return jsonify(error="none yet"), 404
-    path = os.path.join(LAST_SESSION_DIR, "ocr.json")
-    if not os.path.exists(path):
+    
+    # Validate LAST_SESSION_DIR is within SESSIONS_DIR
+    validated_session_dir = validate_path_within_directory(LAST_SESSION_DIR, SESSIONS_DIR)
+    if not validated_session_dir:
+        return jsonify(error="Invalid session directory"), 400
+    
+    path = secure_file_path(validated_session_dir, "ocr.json")
+    if not path or not os.path.exists(path):
         return jsonify(error="ocr data not found"), 404
     return send_file(path, mimetype="application/json")
 
@@ -1913,9 +2133,16 @@ def get_ocr():
 def get_bbox():
     if not LAST_SESSION_DIR:
         return jsonify(error="No session"), 404
-    path = os.path.join(LAST_SESSION_DIR, "ocr.json")
-    if not os.path.exists(path):
+    
+    # Validate LAST_SESSION_DIR is within SESSIONS_DIR
+    validated_session_dir = validate_path_within_directory(LAST_SESSION_DIR, SESSIONS_DIR)
+    if not validated_session_dir:
+        return jsonify(error="Invalid session directory"), 400
+    
+    path = secure_file_path(validated_session_dir, "ocr.json")
+    if not path or not os.path.exists(path):
         return jsonify(error="ocr data not found"), 404
+    
     req = request.get_json()
     text = req.get("text")
     chunk_name = req.get("chunk_name")  # optionally, frontend could pass this
