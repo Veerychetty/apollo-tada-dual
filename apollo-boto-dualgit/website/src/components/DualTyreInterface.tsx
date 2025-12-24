@@ -7,6 +7,48 @@ import essenseLogo from '../assets/Essense labs logo.jpg';
 const MAX_IMAGE_SIZE = 15 * 1024 * 1024; // 15 MB
 const API_BASE_URL = 'http://127.0.0.1:5000';
 
+// Security: Sanitize filename to prevent XSS
+const sanitizeFilename = (filename: string): string => {
+  // Remove any path traversal attempts and dangerous characters
+  return filename
+    .replace(/[^a-z0-9_\-\s.]/gi, '_')  // Replace special chars with underscore
+    .replace(/\.\./g, '_')                // Remove path traversal
+    .replace(/\s+/g, '_')                 // Replace spaces with underscore
+    .replace(/^\.+|\.+$/g, '')            // Remove leading/trailing dots
+    .substring(0, 255);                   // Limit length
+};
+
+// Security: Validate and sanitize image URL to prevent XSS
+const sanitizeImageUrl = (url: string | null | undefined): string | null => {
+  if (!url) return null;
+  
+  // Allow blob URLs (created by URL.createObjectURL)
+  if (url.startsWith('blob:')) {
+    return url;
+  }
+  
+  // Allow data URLs for images only
+  if (url.startsWith('data:image/')) {
+    return url;
+  }
+  
+  // Allow URLs from our API base URL
+  if (url.startsWith(API_BASE_URL)) {
+    try {
+      const urlObj = new URL(url);
+      // Only allow http/https protocols
+      if (urlObj.protocol === 'http:' || urlObj.protocol === 'https:') {
+        return url;
+      }
+    } catch {
+      return null;
+    }
+  }
+  
+  // Reject any other URLs for security
+  return null;
+};
+
 interface TyreData {
   image: File | null;
   dewarped: string | null;
@@ -540,7 +582,7 @@ const DualTyreInterface: React.FC<DualTyreInterfaceProps> = ({ onCombinedResults
             <div className="relative inline-block">
               <img
                 ref={imageRef}
-                src={tyre.dewarped}
+                src={sanitizeImageUrl(tyre.dewarped) || ''}
                 alt="Annotated OCR result"
                 className="block"
                 style={{ height: '60vh', width: 'auto' }}
@@ -693,12 +735,8 @@ const DualTyreInterface: React.FC<DualTyreInterfaceProps> = ({ onCombinedResults
 
       const jsonResult = await response.json();
       
-      // Create filename from template name (sanitize for filesystem)
-      const sanitizedName = finalTemplateName
-        .replace(/[^a-z0-9_\-\s]/gi, '_')  // Replace special chars with underscore
-        .replace(/\s+/g, '_')               // Replace spaces with underscore
-        .toLowerCase();                     // Convert to lowercase
-      
+      // Create filename from template name (sanitize for filesystem and XSS prevention)
+      const sanitizedName = sanitizeFilename(finalTemplateName).toLowerCase();
       const filename = `${sanitizedName}.json`;
       
       // Download the JSON file with custom name
@@ -706,7 +744,9 @@ const DualTyreInterface: React.FC<DualTyreInterfaceProps> = ({ onCombinedResults
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
+      // Security: Use sanitized filename to prevent XSS
       a.download = filename;
+      // Security: Temporarily append to body, click, then immediately remove
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -849,7 +889,7 @@ const DualTyreInterface: React.FC<DualTyreInterfaceProps> = ({ onCombinedResults
               <div className="relative border border-gray-300 rounded-lg overflow-hidden bg-white">
                 <img
                   ref={zoomImageRef}
-                  src={zoomedImage.imageUrl}
+                  src={sanitizeImageUrl(zoomedImage.imageUrl) || ''}
                   alt="Zoomed Annotated OCR"
                   className="w-full h-auto"
                   onLoad={() => {
