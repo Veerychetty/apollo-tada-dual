@@ -1,12 +1,17 @@
-opencv-python==4.8.0.76
-numpy==1.24.4
-flask==2.3.3
-flask-cors==3.0.10
-boto3==1.28.57
-botocore==1.31.57
-python-dotenv==1.0.0
-Pillow==10.0.1
-matplotlib==3.8.0
-numba==0.57.1
-Werkzeug==2.3.7
-nltk==3.8.1
+# Core dependencies with security fixes
+opencv-python>=4.9.0  # Fixed: CVE in 4.8.0.76 (Heap-based Buffer Overflow)
+numpy>=1.26.0,<2.0.0
+flask>=3.0.0
+flask-cors>=6.0.0  # Fixed: CVE in 3.0.10 (Improper Handling, Origin Validation)
+boto3>=1.34.0
+botocore>=1.34.0
+python-dotenv>=1.0.0
+Pillow>=10.2.0
+matplotlib>=3.9.0
+numba>=0.59.0
+Werkzeug>=3.0.3  # Fixed: CVE in 2.3.7 (Remote Code Execution)
+nltk>=3.9.0  # Fixed: CVE in 3.8.1 (Remote Code Execution)
+
+# Security: Pin transitive dependencies with known vulnerabilities
+urllib3>=2.6.0  # Fixed: CVE in 1.26.20 (Resource Allocation, Data Amplification)
+zipp>=3.19.1  # Fixed: CVE in 3.15.0 (Infinite loop)
