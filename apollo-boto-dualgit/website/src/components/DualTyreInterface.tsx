@@ -108,6 +108,7 @@ const DualTyreInterface: React.FC<DualTyreInterfaceProps> = ({ onCombinedResults
   const [topImageType, setTopImageType] = useState<'thick' | 'light' | ''>('');
   const [bottomImageType, setBottomImageType] = useState<'thick' | 'light' | ''>('');
   const [zoomedImage, setZoomedImage] = useState<{ tyreType: 'top' | 'bottom', imageUrl: string } | null>(null);
+  // Shared session ID for both top and bottom tyres in the same session
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
 
   const topImageRef = useRef<HTMLImageElement>(null);
@@ -195,12 +196,18 @@ const DualTyreInterface: React.FC<DualTyreInterfaceProps> = ({ onCombinedResults
 
     try {
       console.log('Starting upload for', tyreType, 'tyre');
+      console.log('Current activeSessionId:', activeSessionId);
       const formData = new FormData();
       formData.append('file', tyre.image);
       formData.append('image_type', imageType);
       formData.append('tyre_type', tyreType);
+      // Always send the active session ID if it exists (shared between top and bottom)
+      // If no session ID exists, backend will create a new one
       if (activeSessionId) {
         formData.append('session_id', activeSessionId);
+        console.log('Sending with existing session_id:', activeSessionId);
+      } else {
+        console.log('No activeSessionId - backend will create new one');
       }
 
       console.log('Sending request to backend...');
@@ -218,9 +225,12 @@ const DualTyreInterface: React.FC<DualTyreInterfaceProps> = ({ onCombinedResults
 
       const result = await response.json();
 
+      // Update the shared session ID - this ensures both top and bottom use the same session
       const sessionId = result.session_id as string | undefined;
       if (sessionId) {
+        // Set the session ID so both top and bottom tyres use the same session
         setActiveSessionId(sessionId);
+        console.log(`Session ID set to: ${sessionId} for ${tyreType} tyre`);
       }
 
       const cacheBuster = Date.now();
@@ -764,9 +774,53 @@ const DualTyreInterface: React.FC<DualTyreInterfaceProps> = ({ onCombinedResults
     }
   };
 
-  // Refresh website to start new tyre session (keeps backend sessions for debugging)
+  // Start new tyre session - reset all state including session ID
   const handleStartNewPair = () => {
-    window.location.reload();
+    // Reset session ID to null so a new one will be created
+    setActiveSessionId(null);
+    
+    // Reset top tyre data
+    setTopTyre({
+      image: null,
+      dewarped: null,
+      stitched: null,
+      fallbackImage: null,
+      extractedData: [],
+      cropBoxes: [],
+      isProcessing: false,
+      isCompleted: false
+    });
+    
+    // Reset bottom tyre data
+    setBottomTyre({
+      image: null,
+      dewarped: null,
+      stitched: null,
+      fallbackImage: null,
+      extractedData: [],
+      cropBoxes: [],
+      isProcessing: false,
+      isCompleted: false
+    });
+    
+    // Reset image types
+    setTopImageType('');
+    setBottomImageType('');
+    
+    // Reset zoomed image
+    setZoomedImage(null);
+    
+    // Reset table data
+    setTopTableData({
+      headers: ['Serial Number', 'Top Tyre Data'],
+      rows: []
+    });
+    setBottomTableData({
+      headers: ['Serial Number', 'Bottom Tyre Data'],
+      rows: []
+    });
+    
+    console.log('New tyre session started - all state reset');
   };
 
   return (

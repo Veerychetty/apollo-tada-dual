@@ -1787,8 +1787,15 @@ def resolve_session_path(session_id, tyre_type=None):
     
     # Handle tyre_type subdirectory
     if tyre_type and tyre_type.lower() in ["top", "bottom"]:
+        # Security: Only allow 'top' or 'bottom' as subdirectory names
+        # This prevents path traversal by restricting to known safe values
+        allowed_tyre_types = ["top", "bottom"]
+        if tyre_type.lower() not in allowed_tyre_types:
+            app.logger.error(f"Invalid tyre_type: {tyre_type}")
+            return None
+        
         sub_path = os.path.join(validated_base, tyre_type.lower())
-        # Validate subdirectory path
+        # Validate subdirectory path is within the base session directory
         validated_sub = validate_path_within_directory(sub_path, validated_base)
         if not validated_sub:
             app.logger.error(f"Path traversal attempt in tyre_type: {tyre_type}")
@@ -1828,12 +1835,18 @@ def upload():
         sess_id = sanitize_session_id(provided_session_id.strip())
         if not sess_id:
             # If sanitization fails, generate new one
+            app.logger.warning(f"Session ID sanitization failed, generating new one")
             sess_id = uuid.uuid4().hex
+        else:
+            app.logger.info(f"Using provided session_id: {sess_id} for tyre_type: {tyre_type}")
     else:
         sess_id = uuid.uuid4().hex
+        app.logger.info(f"Generated new session_id: {sess_id} for tyre_type: {tyre_type}")
 
     # Resolve and validate session path
+    # For 'top' or 'bottom', create subdirectories: sessions/{session_id}/top/ or sessions/{session_id}/bottom/
     session_path = resolve_session_path(sess_id, None if tyre_type == 'single' else tyre_type)
+    app.logger.info(f"Resolved session_path: {session_path} for session_id: {sess_id}, tyre_type: {tyre_type}")
     if not session_path:
         return jsonify(error="Invalid session_id"), 400
     
@@ -1985,6 +1998,9 @@ def upload():
             ocr_endpoint = f"/session/{sess_id}/ocr"
 
         log_duration("full_upload_pipeline", process_timer, details=f"session={sess_id}, detections={len(all_detections)}")
+        
+        # Log the final session structure for debugging
+        app.logger.info(f"Upload complete - session_id: {sess_id}, tyre_type: {tyre_type}, session_path: {session_path}")
 
         return jsonify({
             "session_id": sess_id,
