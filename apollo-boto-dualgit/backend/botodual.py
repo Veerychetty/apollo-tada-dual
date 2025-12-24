@@ -2278,4 +2278,7 @@ def merge_entries(entries):
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    # Security: Only enable debug mode in development
+    # Set FLASK_DEBUG environment variable to "1" or "true" to enable debug mode
+    debug_mode = os.environ.get('FLASK_DEBUG', '').lower() in ('1', 'true', 'yes')
+    app.run(host="0.0.0.0", port=5000, debug=debug_mode)
